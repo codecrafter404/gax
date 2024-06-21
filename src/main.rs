@@ -4,7 +4,7 @@ use esp32_nimble::{
     utilities::BleUuid, uuid128, BLEAdvertisementData, BLEDevice, BLEError, NimbleProperties,
 };
 use esp_idf_svc::hal::{gpio::PinDriver, peripherals::Peripherals};
-use rand::Rng;
+use rand::{thread_rng, Rng};
 
 const BLE_NAME: &str = "GAX 0.1";
 const SERVICE_UID: BleUuid = BleUuid::Uuid32(0x1337);
@@ -38,7 +38,6 @@ fn main() {
         )
     });
 
-    led.set_high().unwrap();
     let service = server.create_service(SERVICE_UID);
     let lock_char = service.lock().create_characteristic(
         LOCK_CHAR_UID,
@@ -47,12 +46,14 @@ fn main() {
     lock_char
         .lock()
         .on_read(move |attr, _ble_con_desc| {
-            let num = rand::thread_rng().gen::<u64>();
-            log::info!("[🎲] Sending random number: {}", num);
-            attr.set_value(&num.to_le_bytes());
+            let mut challenge_bytes: [u8; 64] = [Default::default(); 64];
+            thread_rng().fill(&mut challenge_bytes);
+            log::info!("[🎲] Sending challenge bytes '{:x?}'", challenge_bytes);
+            attr.set_value(&challenge_bytes);
         })
         .on_write(|a| log::info!("{:?}", String::from_utf8(a.recv_data().to_vec())));
     setup_ble(&mut ble_device).unwrap();
+    led.set_high().unwrap();
     loop {
         std::thread::sleep(Duration::from_secs(2));
     }

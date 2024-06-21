@@ -32,6 +32,10 @@ log = { version = "0.4", default-features = false }
 esp-idf-svc = { version = "0.48", default-features = false, features = ["std", "alloc"]}
 esp32-nimble = {version = "0.6.1", default-features = false, features = ["std"]}
 rand = "0.8.5" 
+k256 = {version = "0.13.3", default-features = false, features = ["std", "ecdsa"]}
 
 [build-dependencies]
 embuild = "0.31.3"
+color-eyre = "0.6.3"
+rand = "0.8.5"
+k256 = {version = "0.13.3", default-features = false, features = ["std", "ecdsa"]}
