@@ -30,7 +30,8 @@ embassy = ["esp-idf-svc/embassy-sync", "esp-idf-svc/critical-section", "esp-idf-
 [dependencies]
 log = { version = "0.4", default-features = false }
 esp-idf-svc = { version = "0.48", default-features = false, features = ["std", "alloc"]}
-esp32-nimble = {version = "0.6.1", default-features = false, features = ["std"]}
+# esp32-nimble = {version = "0.6.1", default-features = false, features = ["std"]}
+esp32-nimble = {default-features = false, features = ["std"], path="../esp32-nimble/"}
 rand = "0.8.5" 
 k256 = {version = "0.13.3", default-features = false, features = ["std", "ecdsa"]}
 

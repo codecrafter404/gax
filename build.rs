@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use k256::ecdsa::{SigningKey, VerifyingKey};
+use k256::ecdsa::SigningKey;
 
 // use rand::thread_rng;
 
@@ -22,6 +22,7 @@ fn main() -> color_eyre::Result<()> {
         if pub_key.exists() {
             std::fs::remove_file(&pub_key)?;
         }
+
         let signing_key = SigningKey::random(&mut rand::thread_rng());
         std::fs::write(priv_key, signing_key.to_bytes())?;
         std::fs::write(pub_key, signing_key.verifying_key().to_sec1_bytes())?;
