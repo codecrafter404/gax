@@ -7,9 +7,8 @@ use esp_idf_svc::hal::{gpio::PinDriver, peripherals::Peripherals};
 use esp_idf_svc::sys::{
     EspError, CONFIG_BT_NIMBLE_TASK_STACK_SIZE, CONFIG_NIMBLE_TASK_STACK_SIZE, NIMBLE_HS_STACK_SIZE,
 };
-use k256::ecdsa::signature::SignerMut;
+use k256::ecdsa::VerifyingKey;
 use k256::ecdsa::{signature::Verifier, Signature};
-use k256::ecdsa::{SigningKey, VerifyingKey};
 use log::LevelFilter;
 use rand::{thread_rng, Rng};
 use std::sync::Arc;
@@ -19,8 +18,9 @@ use std::{
 };
 
 const BLE_NAME: &str = "GAX 0.1";
-const SERVICE_UID: BleUuid = BleUuid::Uuid32(0x1337);
+const SERVICE_UID: BleUuid = uuid128!("5f9b34fb-0000-1000-8000-00805f9b34fb");
 const LOCK_CHAR_UID: BleUuid = uuid128!("00000000-DEAD-BEEF-0001-000000000000");
+const OPEN_TIME: Duration = Duration::from_secs(2);
 // const TIME_CHAR_UID: BleUuid = uuid128!("00000000-DEAD-BEEF-0002-000000000000");
 
 // TODO: https://pub.dev/documentation/ecdsa/latest/ecdsa/ecdsa-library.html
@@ -43,7 +43,7 @@ fn main() {
     esp_idf_svc::log::set_target_level("*", LevelFilter::Trace).unwrap();
 
     log::info!(
-        "Stack Size: {}, {}, {}",
+        "[🐛] Stack Size: {}, {}, {}",
         NIMBLE_HS_STACK_SIZE,
         CONFIG_BT_NIMBLE_TASK_STACK_SIZE,
         CONFIG_NIMBLE_TASK_STACK_SIZE
@@ -117,21 +117,6 @@ fn main() {
                         return;
                     }
                 };
-                {
-                    let key = include_bytes!("../key_dir/private.bin");
-
-                    // log::info!("Building key");
-                    let mut key = SigningKey::from_bytes(key.into()).unwrap();
-                    // log::info!("Signing");
-                    let sig: Signature = key.sign(&challenge_bytes);
-                    // log::info!("Signed");
-                    let sig = sig.to_der().as_bytes().to_vec();
-                    let mut bytes_str = bytes_to_hex_string(&challenge_bytes);
-                    sig.iter().for_each(|x| {
-                        bytes_str.push_str(&format!("{:0>2x}", x));
-                    });
-                    log::info!("Signature solution: {}", bytes_str.to_uppercase());
-                }
                 challengens.push(BLEChallenge {
                     time: SystemTime::now(),
                     challenge_bytes: challenge_bytes.clone(),
@@ -237,7 +222,7 @@ fn main() {
         });
     setup_ble(&mut ble_device).unwrap();
     let mut led = PinDriver::output(dp.pins.gpio16).unwrap();
-    let mut error = PinDriver::output(dp.pins.gpio17).unwrap();
+    let error = Arc::new(Mutex::new(PinDriver::output(dp.pins.gpio17).unwrap()));
     led.set_low().unwrap();
     log::info!("[🚋] Starting BLE Server");
     loop {
@@ -249,20 +234,30 @@ fn main() {
                 continue;
             }
         };
-        match open_door(&res, &mut error, &mut led) {
-            Ok(()) => {}
+        match open_door(&res, &mut led) {
+            Ok(_) => {
+                let error = error.clone();
+                std::thread::spawn(|| {
+                    blink_in_sequence(error, &[true, true, true, true, true])
+                        .expect("Failed to show success sequence -> critical hardware issue");
+                });
+            }
             Err(why) => {
                 log::error!("[❌] ({}) Failed to open door: {:?}", &res, why);
-                blink_in_sequence(&mut error, &[true, false, true, true, true])
-                    .expect("Failed to show error sequence -> criticial hardware issue");
+                let error = error.clone();
+                std::thread::spawn(|| {
+                    blink_in_sequence(error, &[true, false, true, true, true])
+                        .expect("Failed to show error sequence -> criticial hardware issue");
+                });
             }
         }
     }
 }
 fn blink_in_sequence<T: esp_idf_svc::hal::gpio::Pin>(
-    led: &mut PinDriver<T, Output>,
+    led: Arc<Mutex<PinDriver<T, Output>>>,
     sequence: &[bool],
 ) -> Result<(), EspError> {
+    let mut led = led.lock().expect("Unable to lock MUTEX");
     for x in sequence {
         if *x {
             led.set_high()?;
@@ -294,23 +289,18 @@ fn clean_up_challenges(
         .filter(|x| !(x.address == *addr && x.challenge_bytes == challenge_data))
         .collect();
 }
-fn open_door<T: esp_idf_svc::hal::gpio::Pin, X: esp_idf_svc::hal::gpio::Pin>(
+fn open_door<T: esp_idf_svc::hal::gpio::Pin>(
     addr: &BLEAddress,
-    error: &mut PinDriver<T, Output>,
-    door: &mut PinDriver<X, Output>,
+    door: &mut PinDriver<T, Output>,
 ) -> Result<(), EspError> {
     log::info!("[✔️] ({}) opening gate", addr);
 
     door.set_high()?;
-    blink_in_sequence(error, &[true, true, true, true, true])
-        .expect("Failed to show error sequence -> criticial hardware issue");
+    std::thread::sleep(OPEN_TIME);
     door.set_low()?;
+
     Ok(())
 }
-// fn open_door(addr: &BLEAddress) -> Result<(), EspError> {
-//     log::info!("[✔️] ({}) opening gate", addr);
-//     Ok(())
-// }
 fn setup_ble(device: &mut BLEDevice) -> Result<(), BLEError> {
     BLEDevice::set_device_name(BLE_NAME)?;
     device.get_advertising().lock().set_data(
