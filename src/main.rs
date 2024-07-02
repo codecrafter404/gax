@@ -1,7 +1,4 @@
-use esp32_nimble::{
-    utilities::BleUuid, uuid128, BLEAddress, BLEAdvertisementData, BLEDevice, BLEError,
-    NimbleProperties,
-};
+use esp32_nimble::{BLEAddress, BLEAdvertisementData, BLEDevice, BLEError, NimbleProperties};
 use esp_idf_svc::hal::gpio::Output;
 use esp_idf_svc::hal::{gpio::PinDriver, peripherals::Peripherals};
 use esp_idf_svc::sys::{
@@ -17,14 +14,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-const BLE_NAME: &str = "GAX 0.1";
-const SERVICE_UID: BleUuid = uuid128!("5f9b34fb-0000-1000-8000-00805f9b34fb");
-const LOCK_CHAR_UID: BleUuid = uuid128!("00000000-DEAD-BEEF-0001-000000000000");
-const OPEN_TIME: Duration = Duration::from_secs(2);
-// const TIME_CHAR_UID: BleUuid = uuid128!("00000000-DEAD-BEEF-0002-000000000000");
-
-// TODO: https://pub.dev/documentation/ecdsa/latest/ecdsa/ecdsa-library.html
-// TODO: https://docs.rs/ecdsa/latest/ecdsa/struct.SigningKey.html
+mod constants;
 
 #[derive(Debug, Clone)]
 struct BLEChallenge {
@@ -50,6 +40,11 @@ fn main() {
     );
 
     let dp = Peripherals::take().unwrap();
+
+    // Change the folowing gpio pins to your desire!
+    let mut led_pin = PinDriver::output(dp.pins.gpio16).unwrap();
+    let error_pin = Arc::new(Mutex::new(PinDriver::output(dp.pins.gpio17).unwrap()));
+
     let mut ble_device = BLEDevice::take();
     let challenge: Arc<Mutex<Vec<BLEChallenge>>> = Arc::new(Mutex::new(Vec::new()));
     let server = ble_device.get_server();
@@ -84,9 +79,9 @@ fn main() {
         }
     });
 
-    let service = server.create_service(SERVICE_UID);
+    let service = server.create_service(constants::SERVICE_UID);
     let lock_char = service.lock().create_characteristic(
-        LOCK_CHAR_UID,
+        constants::LOCK_CHAR_UID,
         NimbleProperties::READ | NimbleProperties::WRITE,
     );
     let verifying_key = VerifyingKey::from_sec1_bytes(include_bytes!("../key_dir/public.bin"))
@@ -221,9 +216,7 @@ fn main() {
             }
         });
     setup_ble(&mut ble_device).unwrap();
-    let mut led = PinDriver::output(dp.pins.gpio16).unwrap();
-    let error = Arc::new(Mutex::new(PinDriver::output(dp.pins.gpio17).unwrap()));
-    led.set_low().unwrap();
+    led_pin.set_low().unwrap();
     log::info!("[🚋] Starting BLE Server");
     loop {
         // std::thread::sleep(Duration::from_secs(2))
@@ -234,9 +227,9 @@ fn main() {
                 continue;
             }
         };
-        match open_door(&res, &mut led) {
+        match open_door(&res, &mut led_pin) {
             Ok(_) => {
-                let error = error.clone();
+                let error = error_pin.clone();
                 std::thread::spawn(|| {
                     blink_in_sequence(error, &[true, true, true, true, true])
                         .expect("Failed to show success sequence -> critical hardware issue");
@@ -244,7 +237,7 @@ fn main() {
             }
             Err(why) => {
                 log::error!("[❌] ({}) Failed to open door: {:?}", &res, why);
-                let error = error.clone();
+                let error = error_pin.clone();
                 std::thread::spawn(|| {
                     blink_in_sequence(error, &[true, false, true, true, true])
                         .expect("Failed to show error sequence -> criticial hardware issue");
@@ -296,18 +289,18 @@ fn open_door<T: esp_idf_svc::hal::gpio::Pin>(
     log::info!("[✔️] ({}) opening gate", addr);
 
     door.set_high()?;
-    std::thread::sleep(OPEN_TIME);
+    std::thread::sleep(constants::OPEN_TIME);
     door.set_low()?;
 
     Ok(())
 }
 fn setup_ble(device: &mut BLEDevice) -> Result<(), BLEError> {
-    BLEDevice::set_device_name(BLE_NAME)?;
+    BLEDevice::set_device_name(constants::BLE_NAME)?;
     device.get_advertising().lock().set_data(
         BLEAdvertisementData::new()
-            .name(BLE_NAME)
+            .name(constants::BLE_NAME)
             .appearance(0x180)
-            .add_service_uuid(SERVICE_UID),
+            .add_service_uuid(constants::SERVICE_UID),
     )?;
     device.get_advertising().lock().start()?;
     Ok(())
