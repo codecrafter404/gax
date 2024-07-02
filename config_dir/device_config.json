@@ -1,8 +1,0 @@
-{
-  "ble_name": "GAX 0.1",
-  "service_uuid": "5f9b34fb-0000-1000-8000-00805f9b34fb",
-  "lock_char_uuid": "00000000-DEAD-BEEF-0001-000000000000",
-  "open_time_in_ms": 2000,
-  "mac": "",
-  "priv_key": ""
-}
