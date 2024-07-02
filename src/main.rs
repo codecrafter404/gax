@@ -1,3 +1,4 @@
+use esp32_nimble::utilities::BleUuid;
 use esp32_nimble::{BLEAddress, BLEAdvertisementData, BLEDevice, BLEError, NimbleProperties};
 use esp_idf_svc::hal::gpio::Output;
 use esp_idf_svc::hal::{gpio::PinDriver, peripherals::Peripherals};
@@ -8,13 +9,12 @@ use k256::ecdsa::VerifyingKey;
 use k256::ecdsa::{signature::Verifier, Signature};
 use log::LevelFilter;
 use rand::{thread_rng, Rng};
+use serde::Deserialize;
 use std::sync::Arc;
 use std::{
     sync::Mutex,
     time::{Duration, SystemTime},
 };
-
-mod constants;
 
 #[derive(Debug, Clone)]
 struct BLEChallenge {
@@ -22,8 +22,29 @@ struct BLEChallenge {
     challenge_bytes: [u8; 64],
     address: BLEAddress,
 }
+#[derive(Debug, Deserialize)]
+struct DeviceConfig {
+    pub ble_name: String,
+    pub service_uuid: String,
+    pub lock_char_uuid: String,
+    pub open_time_in_ms: u64,
+}
 
 fn main() {
+    let dp: Peripherals = Peripherals::take().unwrap();
+
+    // config
+    let config: DeviceConfig =
+        serde_json::from_str(include_str!("../config_dir/device_config.json")).unwrap();
+    let ble_name: &str = &config.ble_name;
+    let service_uid: BleUuid = BleUuid::from_uuid128_string(&config.service_uuid).unwrap();
+    let lock_char_uid: BleUuid = BleUuid::from_uuid128_string(&config.lock_char_uuid).unwrap();
+    let open_time: Duration = Duration::from_millis(config.open_time_in_ms);
+
+    // change those PINS in order to modify the pinout
+    let trigger_pin: esp_idf_svc::hal::gpio::Gpio16 = dp.pins.gpio16;
+    let error_pin: esp_idf_svc::hal::gpio::Gpio17 = dp.pins.gpio17;
+
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
@@ -39,11 +60,11 @@ fn main() {
         CONFIG_NIMBLE_TASK_STACK_SIZE
     );
 
-    let dp = Peripherals::take().unwrap();
+    // init config
 
     // Change the folowing gpio pins to your desire!
-    let mut led_pin = PinDriver::output(dp.pins.gpio16).unwrap();
-    let error_pin = Arc::new(Mutex::new(PinDriver::output(dp.pins.gpio17).unwrap()));
+    let mut led_pin = PinDriver::output(trigger_pin).unwrap();
+    let error_pin = Arc::new(Mutex::new(PinDriver::output(error_pin).unwrap()));
 
     let mut ble_device = BLEDevice::take();
     let challenge: Arc<Mutex<Vec<BLEChallenge>>> = Arc::new(Mutex::new(Vec::new()));
@@ -79,12 +100,12 @@ fn main() {
         }
     });
 
-    let service = server.create_service(constants::SERVICE_UID);
+    let service = server.create_service(service_uid);
     let lock_char = service.lock().create_characteristic(
-        constants::LOCK_CHAR_UID,
+        lock_char_uid,
         NimbleProperties::READ | NimbleProperties::WRITE,
     );
-    let verifying_key = VerifyingKey::from_sec1_bytes(include_bytes!("../key_dir/public.bin"))
+    let verifying_key = VerifyingKey::from_sec1_bytes(include_bytes!("../config_dir/public.bin"))
         .expect("[❌] Failed to parse Sec1-Bytes public key");
     let verifying_key = Arc::new(verifying_key);
     let read_challenge = challenge.clone();
@@ -215,7 +236,7 @@ fn main() {
                 }
             }
         });
-    setup_ble(&mut ble_device).unwrap();
+    setup_ble(&mut ble_device, ble_name, service_uid).unwrap();
     led_pin.set_low().unwrap();
     log::info!("[🚋] Starting BLE Server");
     loop {
@@ -227,7 +248,7 @@ fn main() {
                 continue;
             }
         };
-        match open_door(&res, &mut led_pin) {
+        match open_door(&res, &mut led_pin, open_time) {
             Ok(_) => {
                 let error = error_pin.clone();
                 std::thread::spawn(|| {
@@ -285,22 +306,23 @@ fn clean_up_challenges(
 fn open_door<T: esp_idf_svc::hal::gpio::Pin>(
     addr: &BLEAddress,
     door: &mut PinDriver<T, Output>,
+    open_time: Duration,
 ) -> Result<(), EspError> {
     log::info!("[✔️] ({}) opening gate", addr);
 
     door.set_high()?;
-    std::thread::sleep(constants::OPEN_TIME);
+    std::thread::sleep(open_time);
     door.set_low()?;
 
     Ok(())
 }
-fn setup_ble(device: &mut BLEDevice) -> Result<(), BLEError> {
-    BLEDevice::set_device_name(constants::BLE_NAME)?;
+fn setup_ble(device: &mut BLEDevice, ble_name: &str, service_uid: BleUuid) -> Result<(), BLEError> {
+    BLEDevice::set_device_name(ble_name)?;
     device.get_advertising().lock().set_data(
         BLEAdvertisementData::new()
-            .name(constants::BLE_NAME)
+            .name(ble_name)
             .appearance(0x180)
-            .add_service_uuid(constants::SERVICE_UID),
+            .add_service_uuid(service_uid),
     )?;
     device.get_advertising().lock().start()?;
     Ok(())

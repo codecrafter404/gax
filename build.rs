@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use base64::prelude::*;
 use k256::ecdsa::SigningKey;
 use serde::Serialize;
 
@@ -15,10 +16,12 @@ struct DeviceConfig {
     priv_key: String,
 }
 
+// !CHANGE THE FOLLOWING LINES IF YOU WANT TO ALTER THE DEFAULT CONFIGURATION!
 pub const BLE_NAME: &str = "GAX 0.1";
 pub const SERVICE_UID: &str = "5f9b34fb-0000-1000-8000-00805f9b34fb";
 pub const LOCK_CHAR_UID: &str = "00000000-DEAD-BEEF-0001-000000000000";
 pub const OPEN_TIME: u32 = 2000;
+pub const MAC_ADDRESS: &str = "DE:AD:BE:EF:00:01"; // TODO: change this mac address
 
 fn main() -> color_eyre::Result<()> {
     // fn main() {
@@ -43,17 +46,27 @@ fn main() -> color_eyre::Result<()> {
         std::fs::write(priv_key, signing_key.to_bytes())?;
         std::fs::write(pub_key, signing_key.verifying_key().to_sec1_bytes())?;
     }
-    let config = DeviceConfig {
+    let config_struct = DeviceConfig {
         ble_name: BLE_NAME.to_owned(),
         service_uuid: SERVICE_UID.to_owned(),
         lock_char_uuid: LOCK_CHAR_UID.to_owned(),
         open_time_in_ms: OPEN_TIME.to_owned(),
         mac: "".to_owned(),
-        priv_key: "".to_owned(),
+        priv_key: base64::prelude::BASE64_STANDARD
+            .encode(std::fs::read("./config_dir/private.bin")?),
     };
 
-    let config = serde_json::to_string_pretty(&config)?;
+    let config = serde_json::to_string_pretty(&config_struct)?;
+    let config_stripped = serde_json::to_string(&config_struct)?;
 
     std::fs::write("./config_dir/device_config.json", config)?;
+
+    qrcode_generator::to_png_to_file(
+        config_stripped,
+        qrcode_generator::QrCodeEcc::High,
+        1024,
+        "./config_dir/qr.png",
+    )?;
+
     Ok(())
 }
