@@ -27,6 +27,7 @@ struct DeviceConfig {
     pub ble_name: String,
     pub service_uuid: String,
     pub lock_char_uuid: String,
+    pub meta_char_uuid: String,
     pub open_time_in_ms: u64,
 }
 

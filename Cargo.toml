@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Codecrafter_404 <codecrafter404@github.com>"]
 edition = "2021"
 resolver = "2"
-rust-version = "1.71"
+rust-version = "1.77.0"
 
 [[bin]]
 name = "gax"

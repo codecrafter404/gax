@@ -11,6 +11,7 @@ struct DeviceConfig {
     ble_name: String,
     service_uuid: String,
     lock_char_uuid: String,
+    meta_char_uuid: String,
     open_time_in_ms: u32,
     mac: String,
     priv_key: String,
@@ -20,10 +21,12 @@ struct DeviceConfig {
 pub const BLE_NAME: &str = "GAX 0.1";
 pub const SERVICE_UID: &str = "5f9b34fb-0000-1000-8000-00805f9b34fb";
 pub const LOCK_CHAR_UID: &str = "00000000-DEAD-BEEF-0001-000000000000";
+pub const META_CHAR_UID: &str = "00000000-DEAD-BEEF-0002-000000000000";
 pub const OPEN_TIME: u32 = 2000;
-pub const MAC_ADDRESS: &str = "DE:AD:BE:EF:00:01"; // TODO: change this mac address
+pub const MAC_ADDRESS: &str = "3c:61:05:30:b3:ce"; // TODO: change this mac address
 
 fn main() -> color_eyre::Result<()> {
+    println!("cargo::rerun-if-changed=config_dir/*");
     // fn main() {
     embuild::espidf::sysenv::output();
 
@@ -50,8 +53,9 @@ fn main() -> color_eyre::Result<()> {
         ble_name: BLE_NAME.to_owned(),
         service_uuid: SERVICE_UID.to_owned(),
         lock_char_uuid: LOCK_CHAR_UID.to_owned(),
+        meta_char_uuid: META_CHAR_UID.to_owned(),
         open_time_in_ms: OPEN_TIME.to_owned(),
-        mac: "".to_owned(),
+        mac: MAC_ADDRESS.to_owned(),
         priv_key: base64::prelude::BASE64_STANDARD
             .encode(std::fs::read("./config_dir/private.bin")?),
     };
