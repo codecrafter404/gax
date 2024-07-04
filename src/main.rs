@@ -28,6 +28,7 @@ struct DeviceConfig {
     pub service_uuid: String,
     pub lock_char_uuid: String,
     pub meta_char_uuid: String,
+    pub logs_char_uuid: String,
     pub open_time_in_ms: u64,
 }
 
@@ -38,8 +39,22 @@ struct MetaDataStruct {
     pub status_led_pin: i32,
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct LogEntry {
+    pub time: i32,
+    pub mac: String,
+    pub status: LogEntryStatus,
+}
+
+#[derive(Debug, Serialize, Clone)]
+enum LogEntryStatus {
+    Successful,
+    Failed(i32),
+}
+
 fn main() {
     let power_on = std::time::SystemTime::now();
+    let logs: Arc<Mutex<Vec<LogEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     let dp: Peripherals = Peripherals::take().unwrap();
 
@@ -51,6 +66,7 @@ fn main() {
     let lock_char_uid: BleUuid = BleUuid::from_uuid128_string(&config.lock_char_uuid).unwrap();
     let open_time: Duration = Duration::from_millis(config.open_time_in_ms);
     let meta_char_uid: BleUuid = BleUuid::from_uuid128_string(&config.meta_char_uuid).unwrap();
+    let logs_char_uid: BleUuid = BleUuid::from_uuid128_string(&config.logs_char_uuid).unwrap();
 
     // change those PINS in order to modify the pinout
     let trigger_pin: esp_idf_svc::hal::gpio::Gpio16 = dp.pins.gpio16;
@@ -117,6 +133,12 @@ fn main() {
     });
 
     let service = server.create_service(service_uid);
+
+    // logs characteristic
+    let logs_char = service.lock().create_characteristic(
+        logs_char_uid,
+        NimbleProperties::READ | NimbleProperties::BROADCAST,
+    );
 
     // metadata characteristic
     let meta_char = service
