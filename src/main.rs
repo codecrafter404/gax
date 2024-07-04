@@ -31,7 +31,17 @@ struct DeviceConfig {
     pub open_time_in_ms: u64,
 }
 
+#[derive(Debug, Serialize)]
+struct MetaDataStruct {
+    pub power_on_hours: u64,
+    pub lock_pin: u32,
+    pub status_led_pin: u32,
+}
+
+
 fn main() {
+    let power_on = std::time::SystemTime::now();
+
     let dp: Peripherals = Peripherals::take().unwrap();
 
     // config
@@ -41,6 +51,7 @@ fn main() {
     let service_uid: BleUuid = BleUuid::from_uuid128_string(&config.service_uuid).unwrap();
     let lock_char_uid: BleUuid = BleUuid::from_uuid128_string(&config.lock_char_uuid).unwrap();
     let open_time: Duration = Duration::from_millis(config.open_time_in_ms);
+    let meta_char_uid: BleUuid = BleUuid::from_uuid128_string(&config.meta_char_uuid).unwrap();
 
     // change those PINS in order to modify the pinout
     let trigger_pin: esp_idf_svc::hal::gpio::Gpio16 = dp.pins.gpio16;
@@ -102,6 +113,14 @@ fn main() {
     });
 
     let service = server.create_service(service_uid);
+
+    // metadata characteristic
+    let meta_char = service.lock().create_characteristic(, properties)
+
+
+
+
+
     let lock_char = service.lock().create_characteristic(
         lock_char_uid,
         NimbleProperties::READ | NimbleProperties::WRITE,
