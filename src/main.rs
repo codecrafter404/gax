@@ -1,5 +1,7 @@
 use esp32_nimble::utilities::BleUuid;
-use esp32_nimble::{BLEAddress, BLEAdvertisementData, BLEDevice, BLEError, NimbleProperties};
+use esp32_nimble::{
+    BLEAddress, BLEAdvertisementData, BLECharacteristic, BLEDevice, BLEError, NimbleProperties,
+};
 use esp_idf_svc::hal::gpio::{Output, Pin};
 use esp_idf_svc::hal::{gpio::PinDriver, peripherals::Peripherals};
 use esp_idf_svc::sys::{
@@ -10,7 +12,8 @@ use k256::ecdsa::{signature::Verifier, Signature};
 use log::LevelFilter;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::error::Error;
+use std::sync::{Arc, PoisonError};
 use std::{
     sync::Mutex,
     time::{Duration, SystemTime},
@@ -41,7 +44,7 @@ struct MetaDataStruct {
 
 #[derive(Debug, Serialize, Clone)]
 struct LogEntry {
-    pub time: i32,
+    pub time: u128,
     pub mac: String,
     pub status: LogEntryStatus,
 }
@@ -139,6 +142,31 @@ fn main() {
         logs_char_uid,
         NimbleProperties::READ | NimbleProperties::BROADCAST,
     );
+    let logs_char_logs = logs.clone();
+    logs_char.lock().on_read(move |attr, ble_con_desc| {
+        let logs = logs_char_logs.clone();
+        let mut logs = match logs.lock() {
+            Ok(x) => x,
+            Err(why) => {
+                log::error!("[❌] Failed to lock the mutex while reading logs: {why}");
+                attr.set_value(&[]);
+                return;
+            }
+        };
+        let logs_json = match serde_json::to_string(&*logs) {
+            Ok(x) => x,
+            Err(why) => {
+                log::error!("[❌] Failed to prepare JSON for log request: {why}");
+                attr.set_value(&[]);
+                return;
+            }
+        };
+        attr.set_value(logs_json.as_bytes());
+        log::info!(
+            "[✏️] ({}) requested the logs",
+            ble_con_desc.address().to_string()
+        );
+    });
 
     // metadata characteristic
     let meta_char = service
@@ -177,6 +205,9 @@ fn main() {
     let verifying_key = Arc::new(verifying_key);
     let read_challenge = challenge.clone();
     let (tx, rx) = std::sync::mpsc::channel();
+    let lock_char_logs = logs.clone();
+    let lock_char_power_on = power_on.clone();
+    let lock_char_logs_char = logs_char.clone();
     lock_char
         .lock()
         .on_read(move |attr, _ble_con_desc| {
@@ -209,6 +240,9 @@ fn main() {
             attr.set_value(&challenge_bytes);
         })
         .on_write(move |args| {
+            let logs = lock_char_logs.clone();
+            let log_char = lock_char_logs_char.clone();
+            let power_on = lock_char_power_on;
             let data = args.recv_data();
             log::info!(
                 "[👀] ({}) Got challenge response '{}'",
@@ -222,6 +256,13 @@ fn main() {
                     data.len()
                 );
                 args.reject_with_error_code(0x01);
+                append_logs(
+                    args.desc().address().to_string(),
+                    LogEntryStatus::Failed(0x01),
+                    power_on,
+                    logs,
+                    log_char,
+                );
                 return;
             }
             let challenge_data = &data[..64];
@@ -237,6 +278,12 @@ fn main() {
                             why
                         );
                         args.reject_with_error_code(0x05);
+                        append_logs(
+                            args.desc().address().to_string(),
+                            LogEntryStatus::Failed(0x05),
+                            power_on,
+                            logs,
+                        );
                         return;
                     }
                 };
@@ -251,6 +298,12 @@ fn main() {
                             bytes_to_hex_string(challenge_data)
                         );
                         args.reject_with_error_code(0x06);
+                        append_logs(
+                            args.desc().address().to_string(),
+                            LogEntryStatus::Failed(0x06),
+                            power_on,
+                            logs,
+                        );
                         return;
                     }
                 };
@@ -263,6 +316,12 @@ fn main() {
                     );
                     clean_up_challenges(&mut challenges, challenge_data, &args.desc().address());
                     args.reject_with_error_code(0x07);
+                    append_logs(
+                        args.desc().address().to_string(),
+                        LogEntryStatus::Failed(0x07),
+                        power_on,
+                        logs,
+                    );
                     return;
                 }
                 clean_up_challenges(&mut challenges, challenge_data, &args.desc().address());
@@ -279,6 +338,12 @@ fn main() {
                         why
                     );
                     args.reject_with_error_code(0x02);
+                    append_logs(
+                        args.desc().address().to_string(),
+                        LogEntryStatus::Failed(0x02),
+                        power_on,
+                        logs,
+                    );
                     return;
                 }
             };
@@ -289,6 +354,12 @@ fn main() {
                     Err(why) => {
                         log::error!("[❌] Failed to tx: {:?}", why);
                         args.reject_with_error_code(0x08);
+                        append_logs(
+                            args.desc().address().to_string(),
+                            LogEntryStatus::Failed(0x08),
+                            power_on,
+                            logs,
+                        );
                         return;
                     }
                 },
@@ -299,6 +370,12 @@ fn main() {
                         why
                     );
                     args.reject_with_error_code(0x04);
+                    append_logs(
+                        args.desc().address().to_string(),
+                        LogEntryStatus::Failed(0x04),
+                        power_on,
+                        logs,
+                    );
                     return;
                 }
             }
@@ -318,6 +395,13 @@ fn main() {
         match open_door(&res, &mut led_pin, open_time) {
             Ok(_) => {
                 let error = error_pin.clone();
+
+                append_logs(
+                    res.to_string(),
+                    LogEntryStatus::Successful,
+                    power_on,
+                    logs.clone(),
+                );
                 std::thread::spawn(|| {
                     blink_in_sequence(error, &[true, true, true, true, true])
                         .expect("Failed to show success sequence -> critical hardware issue");
@@ -393,4 +477,43 @@ fn setup_ble(device: &mut BLEDevice, ble_name: &str, service_uid: BleUuid) -> Re
     )?;
     device.get_advertising().lock().start()?;
     Ok(())
+}
+fn append_logs(
+    mac: String,
+    status: LogEntryStatus,
+    start: SystemTime,
+    logs: Arc<Mutex<Vec<LogEntry>>>,
+    notify: Arc<Mutex<BLECharacteristic>>, // ) -> Result<(), PoisonError<std::sync::MutexGuard<'static, Vec<LogEntry>>>> {
+) {
+    let logs = logs.clone();
+    let entry = LogEntry {
+        mac,
+        status,
+        time: start.elapsed().expect("Time ran backwards").as_millis(),
+    };
+    let mut logs = match logs.lock() {
+        Ok(x) => x,
+        Err(_) => {
+            log::error!("[❌] Failed to lock logs mutex");
+            return;
+        }
+    };
+    if logs.len() >= 100 {
+        logs.reverse();
+        logs.pop();
+        logs.reverse();
+    }
+    logs.push(entry);
+    let entry_string = match serde_json::to_string(&entry) {
+        Ok(x) => x,
+        Err(why) => {
+            log::error!("[❌] Failed to prepare JSON for notify: {why}");
+            return;
+        }
+    };
+    if let Ok(x) = notify.lock() {
+        x.set_value(entry_string.as_bytes());
+    }
+
+    return;
 }
