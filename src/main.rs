@@ -12,8 +12,7 @@ use k256::ecdsa::{signature::Verifier, Signature};
 use log::LevelFilter;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::{
     sync::Mutex,
     time::{Duration, SystemTime},
@@ -44,9 +43,27 @@ struct MetaDataStruct {
 
 #[derive(Debug, Serialize, Clone)]
 struct LogEntry {
-    pub time: u128,
-    pub mac: String,
-    pub status: LogEntryStatus,
+    // Total bytes: 15
+    pub time: u64,              // 8byte
+    pub mac: String,            // 6byte
+    pub status: LogEntryStatus, // 1byte
+}
+impl LogEntry {
+    pub fn encode(&self) -> [u8; 15] {
+        let mut res: [u8; 15] = [0x0; 15];
+        res[..8].clone_from_slice(&self.time.to_be_bytes());
+        let mac: Vec<u8> = self
+            .mac
+            .split(":")
+            .map(|x| u8::from_str_radix(x, 16).unwrap())
+            .collect();
+        res[8..14].clone_from_slice(&mac);
+        res[14] = match self.status {
+            LogEntryStatus::Failed(x) => x as u8,
+            LogEntryStatus::Successful => 0,
+        };
+        return res;
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -145,7 +162,7 @@ fn main() {
     let logs_char_logs = logs.clone();
     logs_char.lock().on_read(move |attr, ble_con_desc| {
         let logs = logs_char_logs.clone();
-        let logs = match logs.lock() {
+        let mut logs = match logs.lock() {
             Ok(x) => x,
             Err(why) => {
                 log::error!("[❌] Failed to lock the mutex while reading logs: {why}");
@@ -153,15 +170,13 @@ fn main() {
                 return;
             }
         };
-        let logs_json = match serde_json::to_string(&*logs) {
-            Ok(x) => x,
-            Err(why) => {
-                log::error!("[❌] Failed to prepare JSON for log request: {why}");
-                attr.set_value(&[]);
-                return;
-            }
-        };
-        attr.set_value(logs_json.as_bytes());
+        // ensure only 32 elements are present
+        logs.reverse();
+        logs.truncate(32);
+        logs.reverse();
+
+        let logs: Vec<u8> = logs.iter().flat_map(|x| x.encode()).collect();
+        attr.set_value(&logs);
         log::info!(
             "[✏️] ({}) requested the logs",
             ble_con_desc.address().to_string()
@@ -496,7 +511,7 @@ fn append_logs(
     let entry = LogEntry {
         mac,
         status,
-        time: start.elapsed().expect("Time ran backwards").as_millis(),
+        time: start.elapsed().expect("Time ran backwards").as_secs(),
     };
     let mut logs = match logs.lock() {
         Ok(x) => x,
@@ -505,20 +520,13 @@ fn append_logs(
             return;
         }
     };
-    if logs.len() >= 100 {
+    if logs.len() >= 32 {
         logs.reverse();
         logs.pop();
         logs.reverse();
     }
     logs.push(entry.clone());
-    let entry_string = match serde_json::to_string(&entry) {
-        Ok(x) => x,
-        Err(why) => {
-            log::error!("[❌] Failed to prepare JSON for notify: {why}");
-            return;
-        }
-    };
-    notify.lock().set_value(entry_string.as_bytes());
+    notify.lock().set_value(&entry.encode());
 
     return;
 }
