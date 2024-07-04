@@ -1,6 +1,6 @@
 use esp32_nimble::utilities::BleUuid;
 use esp32_nimble::{BLEAddress, BLEAdvertisementData, BLEDevice, BLEError, NimbleProperties};
-use esp_idf_svc::hal::gpio::Output;
+use esp_idf_svc::hal::gpio::{Output, Pin};
 use esp_idf_svc::hal::{gpio::PinDriver, peripherals::Peripherals};
 use esp_idf_svc::sys::{
     EspError, CONFIG_BT_NIMBLE_TASK_STACK_SIZE, CONFIG_NIMBLE_TASK_STACK_SIZE, NIMBLE_HS_STACK_SIZE,
@@ -9,7 +9,7 @@ use k256::ecdsa::VerifyingKey;
 use k256::ecdsa::{signature::Verifier, Signature};
 use log::LevelFilter;
 use rand::{thread_rng, Rng};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::{
     sync::Mutex,
@@ -31,13 +31,12 @@ struct DeviceConfig {
     pub open_time_in_ms: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct MetaDataStruct {
-    pub power_on_hours: u64,
-    pub lock_pin: u32,
-    pub status_led_pin: u32,
+    pub power_on_hours: f64,
+    pub trigger_pin: i32,
+    pub status_led_pin: i32,
 }
-
 
 fn main() {
     let power_on = std::time::SystemTime::now();
@@ -57,6 +56,11 @@ fn main() {
     let trigger_pin: esp_idf_svc::hal::gpio::Gpio16 = dp.pins.gpio16;
     let error_pin: esp_idf_svc::hal::gpio::Gpio17 = dp.pins.gpio17;
 
+    let meta_data = MetaDataStruct {
+        power_on_hours: 0.,
+        trigger_pin: trigger_pin.pin(),
+        status_led_pin: error_pin.pin(),
+    };
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
@@ -115,11 +119,32 @@ fn main() {
     let service = server.create_service(service_uid);
 
     // metadata characteristic
-    let meta_char = service.lock().create_characteristic(, properties)
+    let meta_char = service
+        .lock()
+        .create_characteristic(meta_char_uid, NimbleProperties::READ);
 
-
-
-
+    meta_char.lock().on_read(move |attr, _ble_con_desc| {
+        let mut meta = (&meta_data).clone();
+        meta.power_on_hours = match power_on.elapsed() {
+            Ok(e) => e.as_secs_f64() / (60. * 60.),
+            Err(why) => {
+                log::error!("[❌] Failed to read power on hours: {}", why.to_string());
+                -1.
+            }
+        };
+        let res = match serde_json::to_string(&meta) {
+            Ok(x) => x,
+            Err(why) => {
+                log::error!("[❌] Failed to prepare json: {}", why.to_string());
+                "".to_owned()
+            }
+        };
+        attr.set_value(res.as_bytes());
+        log::info!(
+            "[ℹ️] ({}) requested the metadata",
+            _ble_con_desc.address().to_string()
+        )
+    });
 
     let lock_char = service.lock().create_characteristic(
         lock_char_uid,
