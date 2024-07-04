@@ -44,14 +44,14 @@ struct MetaDataStruct {
 #[derive(Debug, Serialize, Clone)]
 struct LogEntry {
     // Total bytes: 15
-    pub time: u64,              // 8byte
+    pub time: SystemTime,       // 8byte
     pub mac: String,            // 6byte
     pub status: LogEntryStatus, // 1byte
 }
 impl LogEntry {
     pub fn encode(&self) -> [u8; 15] {
         let mut res: [u8; 15] = [0x0; 15];
-        res[..8].clone_from_slice(&self.time.to_be_bytes());
+        res[..8].clone_from_slice(&self.time.elapsed().unwrap().as_secs().to_be_bytes());
         let mac: Vec<u8> = self
             .mac
             .split(":")
@@ -503,7 +503,7 @@ fn setup_ble(device: &mut BLEDevice, ble_name: &str, service_uid: BleUuid) -> Re
 fn append_logs(
     mac: String,
     status: LogEntryStatus,
-    start: SystemTime,
+    _start: SystemTime,
     logs: Arc<Mutex<Vec<LogEntry>>>,
     notify: Arc<esp32_nimble::utilities::mutex::Mutex<BLECharacteristic>>, // ) -> Result<(), PoisonError<std::sync::MutexGuard<'static, Vec<LogEntry>>>> {
 ) {
@@ -511,7 +511,7 @@ fn append_logs(
     let entry = LogEntry {
         mac,
         status,
-        time: start.elapsed().expect("Time ran backwards").as_secs(),
+        time: SystemTime::now(),
     };
     let mut logs = match logs.lock() {
         Ok(x) => x,
