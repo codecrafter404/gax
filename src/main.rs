@@ -140,12 +140,12 @@ fn main() {
     // logs characteristic
     let logs_char = service.lock().create_characteristic(
         logs_char_uid,
-        NimbleProperties::READ | NimbleProperties::BROADCAST,
+        NimbleProperties::READ | NimbleProperties::BROADCAST | NimbleProperties::NOTIFY,
     );
     let logs_char_logs = logs.clone();
     logs_char.lock().on_read(move |attr, ble_con_desc| {
         let logs = logs_char_logs.clone();
-        let mut logs = match logs.lock() {
+        let logs = match logs.lock() {
             Ok(x) => x,
             Err(why) => {
                 log::error!("[❌] Failed to lock the mutex while reading logs: {why}");
@@ -283,6 +283,7 @@ fn main() {
                             LogEntryStatus::Failed(0x05),
                             power_on,
                             logs,
+                            log_char,
                         );
                         return;
                     }
@@ -303,6 +304,7 @@ fn main() {
                             LogEntryStatus::Failed(0x06),
                             power_on,
                             logs,
+                            log_char,
                         );
                         return;
                     }
@@ -321,6 +323,7 @@ fn main() {
                         LogEntryStatus::Failed(0x07),
                         power_on,
                         logs,
+                        log_char,
                     );
                     return;
                 }
@@ -343,6 +346,7 @@ fn main() {
                         LogEntryStatus::Failed(0x02),
                         power_on,
                         logs,
+                        log_char,
                     );
                     return;
                 }
@@ -359,6 +363,7 @@ fn main() {
                             LogEntryStatus::Failed(0x08),
                             power_on,
                             logs,
+                            log_char,
                         );
                         return;
                     }
@@ -375,6 +380,7 @@ fn main() {
                         LogEntryStatus::Failed(0x04),
                         power_on,
                         logs,
+                        log_char,
                     );
                     return;
                 }
@@ -401,6 +407,7 @@ fn main() {
                     LogEntryStatus::Successful,
                     power_on,
                     logs.clone(),
+                    logs_char.clone(),
                 );
                 std::thread::spawn(|| {
                     blink_in_sequence(error, &[true, true, true, true, true])
@@ -483,7 +490,7 @@ fn append_logs(
     status: LogEntryStatus,
     start: SystemTime,
     logs: Arc<Mutex<Vec<LogEntry>>>,
-    notify: Arc<Mutex<BLECharacteristic>>, // ) -> Result<(), PoisonError<std::sync::MutexGuard<'static, Vec<LogEntry>>>> {
+    notify: Arc<esp32_nimble::utilities::mutex::Mutex<BLECharacteristic>>, // ) -> Result<(), PoisonError<std::sync::MutexGuard<'static, Vec<LogEntry>>>> {
 ) {
     let logs = logs.clone();
     let entry = LogEntry {
@@ -503,7 +510,7 @@ fn append_logs(
         logs.pop();
         logs.reverse();
     }
-    logs.push(entry);
+    logs.push(entry.clone());
     let entry_string = match serde_json::to_string(&entry) {
         Ok(x) => x,
         Err(why) => {
@@ -511,9 +518,7 @@ fn append_logs(
             return;
         }
     };
-    if let Ok(x) = notify.lock() {
-        x.set_value(entry_string.as_bytes());
-    }
+    notify.lock().set_value(entry_string.as_bytes());
 
     return;
 }
